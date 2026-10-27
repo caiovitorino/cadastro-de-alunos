@@ -1,0 +1,200 @@
+interface Aluno {
+  id: number;
+  nome: string;
+  email: string;
+  curso: string;
+}
+
+const studentsBody = document.querySelector<HTMLTableSectionElement>("#students-body")!;
+const searchInput = document.querySelector<HTMLInputElement>("#search-input")!;
+const totalAlunos = document.querySelector<HTMLElement>("#total-alunos")!;
+const totalCursos = document.querySelector<HTMLElement>("#total-cursos")!;
+const ultimoCadastro = document.querySelector<HTMLElement>("#ultimo-cadastro")!;
+const resultsCount = document.querySelector<HTMLElement>("#results-count")!;
+const footerCount = document.querySelector<HTMLElement>("#footer-count")!;
+const modal = document.querySelector<HTMLDialogElement>("#student-modal")!;
+const deleteModal = document.querySelector<HTMLDialogElement>("#delete-modal")!;
+const form = document.querySelector<HTMLFormElement>("#student-form")!;
+const formError = document.querySelector<HTMLElement>("#form-error")!;
+const saveButton = document.querySelector<HTMLButtonElement>("#save-student")!;
+const toastRegion = document.querySelector<HTMLElement>("#toast-region")!;
+
+let alunos: Aluno[] = [];
+let alunoParaExcluir: number | null = null;
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+  } as Record<string, string>)[char] || char));
+}
+
+function iniciais(nome: string): string {
+  return nome.trim().split(/\s+/).slice(0, 2).map((parte) => parte[0] || "").join("").toUpperCase();
+}
+
+function mostrarToast(titulo: string, mensagem: string, erro = false): void {
+  const toast = document.createElement("div");
+  toast.className = `toast${erro ? " error" : ""}`;
+  toast.innerHTML = `<span class="toast-mark">${erro ? "!" : "✓"}</span><div><strong>${escapeHtml(titulo)}</strong><p>${escapeHtml(mensagem)}</p></div>`;
+  toastRegion.appendChild(toast);
+  window.setTimeout(() => toast.remove(), 4200);
+}
+
+function mostrarErroLinha(mensagem: string): void {
+  studentsBody.innerHTML = `<tr><td colspan="5" class="empty-cell"><span class="empty-state-icon">!</span>${escapeHtml(mensagem)}</td></tr>`;
+  resultsCount.textContent = "Não foi possível carregar";
+  footerCount.textContent = "Verifique a conexão com o servidor.";
+}
+
+function renderizarAlunos(): void {
+  const termo = searchInput.value.trim().toLocaleLowerCase("pt-BR");
+  const filtrados = alunos.filter((aluno) =>
+    [aluno.nome, aluno.email, aluno.curso].some((campo) =>
+      campo.toLocaleLowerCase("pt-BR").includes(termo)
+    )
+  );
+
+  totalAlunos.textContent = String(alunos.length);
+  totalCursos.textContent = String(new Set(alunos.map((a) => a.curso.trim().toLocaleLowerCase("pt-BR"))).size);
+  ultimoCadastro.textContent = alunos.length ? `#${alunos[0].id}` : "Nenhum";
+  resultsCount.textContent = `${filtrados.length} ${filtrados.length === 1 ? "registro" : "registros"}`;
+  footerCount.textContent = `Exibindo ${filtrados.length} de ${alunos.length} alunos`;
+
+  if (!filtrados.length) {
+    const buscando = Boolean(termo);
+    studentsBody.innerHTML = `<tr><td colspan="5" class="empty-cell"><span class="empty-state-icon">${buscando ? "⌕" : "＋"}</span>${buscando ? "Nenhum aluno corresponde à sua busca." : "Ainda não há alunos cadastrados. Clique em “Novo aluno” para começar."}</td></tr>`;
+    return;
+  }
+
+  studentsBody.innerHTML = filtrados.map((aluno) => `
+    <tr>
+      <td><span class="student-sub">#${aluno.id}</span></td>
+      <td><div class="student-cell"><span class="student-avatar">${escapeHtml(iniciais(aluno.nome))}</span><div><div class="student-name">${escapeHtml(aluno.nome)}</div><div class="student-sub">Aluno cadastrado</div></div></div></td>
+      <td class="email-text">${escapeHtml(aluno.email)}</td>
+      <td><span class="course-pill" title="${escapeHtml(aluno.curso)}">${escapeHtml(aluno.curso)}</span></td>
+      <td class="actions-cell"><button class="action-delete" type="button" data-delete="${aluno.id}" aria-label="Excluir ${escapeHtml(aluno.nome)}" title="Excluir aluno"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 10v6m4-6v6"/></svg></button></td>
+    </tr>`).join("");
+}
+
+async function carregarAlunos(): Promise<void> {
+  studentsBody.innerHTML = '<tr><td colspan="5" class="loading-cell"><span class="spinner"></span> Carregando alunos...</td></tr>';
+  try {
+    const resposta = await fetch("/api/alunos");
+    if (!resposta.ok) throw new Error("A API retornou um erro ao consultar os alunos.");
+    alunos = await resposta.json() as Aluno[];
+    renderizarAlunos();
+  } catch (error) {
+    console.error(error);
+    mostrarErroLinha("Não foi possível carregar os dados. Confira se o servidor e o MySQL estão ativos.");
+    mostrarToast("Falha na consulta", "Verifique o servidor e a conexão com o banco.", true);
+  }
+}
+
+function abrirModal(): void {
+  form.reset();
+  formError.textContent = "";
+  modal.showModal();
+  window.setTimeout(() => document.querySelector<HTMLInputElement>("#nome")?.focus(), 50);
+}
+
+function fecharModal(): void {
+  modal.close();
+  formError.textContent = "";
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  formError.textContent = "";
+  const dados = {
+    nome: (document.querySelector<HTMLInputElement>("#nome")!.value).trim(),
+    email: (document.querySelector<HTMLInputElement>("#email")!.value).trim(),
+    curso: (document.querySelector<HTMLInputElement>("#curso")!.value).trim()
+  };
+
+  if (!dados.nome || !dados.email || !dados.curso) {
+    formError.textContent = "Preencha todos os campos para continuar.";
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dados.email)) {
+    formError.textContent = "Digite um endereço de e-mail válido.";
+    return;
+  }
+
+  saveButton.disabled = true;
+  saveButton.textContent = "Salvando...";
+  try {
+    const resposta = await fetch("/api/alunos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dados)
+    });
+    const resultado = await resposta.json() as Aluno | { mensagem?: string };
+    if (!resposta.ok) {
+      formError.textContent = "mensagem" in resultado && resultado.mensagem ? resultado.mensagem : "Não foi possível cadastrar o aluno.";
+      return;
+    }
+    fecharModal();
+    mostrarToast("Cadastro realizado", `${dados.nome} foi adicionado à lista.`);
+    await carregarAlunos();
+  } catch (error) {
+    console.error(error);
+    formError.textContent = "Falha de comunicação com o servidor. Tente novamente.";
+  } finally {
+    saveButton.disabled = false;
+    saveButton.textContent = "Salvar cadastro";
+  }
+});
+
+studentsBody.addEventListener("click", (event) => {
+  const alvo = event.target as HTMLElement;
+  const botao = alvo.closest<HTMLButtonElement>("[data-delete]");
+  if (!botao) return;
+  const id = Number(botao.dataset.delete);
+  const aluno = alunos.find((item) => item.id === id);
+  if (!aluno) return;
+  alunoParaExcluir = id;
+  document.querySelector<HTMLElement>("#delete-description")!.textContent =
+    `O cadastro de ${aluno.nome} será removido permanentemente. Esta ação não pode ser desfeita.`;
+  deleteModal.showModal();
+});
+
+document.querySelector<HTMLButtonElement>("#confirm-delete")!.addEventListener("click", async () => {
+  if (alunoParaExcluir === null) return;
+  const id = alunoParaExcluir;
+  const botao = document.querySelector<HTMLButtonElement>("#confirm-delete")!;
+  botao.disabled = true;
+  botao.textContent = "Excluindo...";
+  try {
+    const resposta = await fetch(`/api/alunos/${id}`, { method: "DELETE" });
+    const resultado = await resposta.json() as { mensagem?: string };
+    if (!resposta.ok) throw new Error(resultado.mensagem || "Não foi possível excluir o aluno.");
+    deleteModal.close();
+    mostrarToast("Aluno excluído", resultado.mensagem || "O registro foi removido.");
+    await carregarAlunos();
+  } catch (error) {
+    mostrarToast("Não foi possível excluir", error instanceof Error ? error.message : "Tente novamente.", true);
+  } finally {
+    alunoParaExcluir = null;
+    botao.disabled = false;
+    botao.textContent = "Confirmar exclusão";
+  }
+});
+
+document.querySelector<HTMLButtonElement>("#btn-novo")!.addEventListener("click", abrirModal);
+document.querySelector<HTMLButtonElement>("#close-modal")!.addEventListener("click", fecharModal);
+document.querySelector<HTMLButtonElement>("#cancel-modal")!.addEventListener("click", fecharModal);
+document.querySelector<HTMLButtonElement>("#cancel-delete")!.addEventListener("click", () => {
+  alunoParaExcluir = null;
+  deleteModal.close();
+});
+document.querySelector<HTMLButtonElement>("#btn-atualizar")!.addEventListener("click", () => void carregarAlunos());
+searchInput.addEventListener("input", renderizarAlunos);
+modal.addEventListener("click", (event) => { if (event.target === modal) fecharModal(); });
+deleteModal.addEventListener("click", (event) => { if (event.target === deleteModal) deleteModal.close(); });
+
+document.querySelector<HTMLElement>("#year")!.textContent = String(new Date().getFullYear());
+document.querySelector<HTMLElement>("#today-label")!.textContent = new Intl.DateTimeFormat("pt-BR", {
+  day: "2-digit", month: "short", year: "numeric"
+}).format(new Date());
+
+void carregarAlunos();
